@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diorama 3D - Bloque de Departamentos</title>
+    <style>
+        /* Paleta de colores definida por el usuario */
+        :root {
+            --color-bg-deep: #3B141A;
+            --color-surface-card: #522129;
+            --color-accent-gold: #E5A853;
+            --color-accent-saffron: #C9863B;
+            --color-text-primary: #FDF3E7;
+            --color-text-muted: rgba(253, 243, 231, 0.78);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--color-bg-deep);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: system-ui, -apple-system, sans-serif;
+            user-select: none;
+        }
+
+        /* Marco de 1920x1080 adaptable al viewport manteniendo aspecto y sin barras */
+        #viewport-frame {
+            width: 100vw;
+            height: 100vh;
+            max-width: 1920px;
+            max-height: 1080px;
+            aspect-ratio: 16 / 9;
+            position: relative;
+            overflow: hidden;
+            background: radial-gradient(circle at 50% 45%, #522129 0%, #3B141A 75%, #260B0F 100%);
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
+        }
+
+        canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+            outline: none;
+        }
+
+        /* Indicador discreto de carga inicial que se desvanece */
+        #loader {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: var(--color-bg-deep);
+            color: var(--color-accent-gold);
+            font-size: 0.95rem;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            transition: opacity 0.6s ease;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+
+    <!-- Import Map para Three.js y Addons desde CDN -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.168.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.168.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="viewport-frame">
+        <div id="loader">Construyendo Diorama...</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+        import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+        // =========================================================================
+        // 1. CONFIGURACIÓN DE PALETA Y MATERIALES (Sin texturas, solo PBR limpio)
+        // =========================================================================
+        const PALETTE = {
+            bgDeep: 0x3B141A,
+            surfaceCard: 0x522129,
+            accentGold: 0xE5A853,
+            accentSaffron: 0xC9863B,
+            textPrimary: 0xFDF3E7,
+            terracottaWall: 0xB84A44,   // Muros rojo ladrillo/terracota cálido
+            terracottaDark: 0x8F3532,   // Zócalos y detalles oscuros
+            beamCream: 0xFDF3E7,        // Vigas, pilares blancos/crema y cornisas
+            roofSlate: 0x6A3A3E,        // Techumbre inclinada
+            windowGlass: 0x261216,      // Cristal oscuro reflejante
+            windowLit: 0xE5A853,        // Ventanas con luz cálida interior
+            asphalt: 0x382024,          // Calzada oscura cálida
+            sidewalk: 0xE8D8C8,         // Vereda clara
+            dirtEarth: 0xC9863B,        // Tierra seca/azafrán
+            grassPatch: 0x6B7A40,       // Vegetación cálida
+            treeFoliage1: 0x5A7238,     // Copa árbol principal
+            treeFoliage2: 0x7A8C42,     // Copa árbol secundario
+            trunkWood: 0x5C3A28,        // Troncos
+            poleMetal: 0x4A3B3D,        // Postes y farolas
+            carRed: 0xD94E48,
+            carGold: 0xE5A853,
+            carCream: 0xFDF3E7,
+            carSaffron: 0xC9863B,
+            tireBlack: 0x1E1012
+        };
+
+        // Caché de materiales MeshStandardMaterial para optimizar memoria y render
+        const materials = {};
+        function getMat(colorHex, roughness = 0.65, metalness = 0.05, emissiveHex = 0x000000, emissiveIntensity = 0) {
+            const key = `${colorHex}_${roughness}_${metalness}_${emissiveHex}_${emissiveIntensity}`;
+            if (!materials[key]) {
+                materials[key] = new THREE.MeshStandardMaterial({
+                    color: colorHex,
+                    roughness,
+                    metalness,
+                    emissive: emissiveHex,
+                    emissiveIntensity
+                });
+            }
+            return materials[key];
+        }
+
+        // =========================================================================
+        // 2. INICIALIZACIÓN DE ESCENA, CÁMARA ISOMÉTRICA Y RENDERER
+        // =========================================================================
+        const container = document.getElementById('viewport-frame');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(PALETTE.bgDeep);
+        scene.fog = new THREE.FogExp2(PALETTE.bgDeep, 0.011);
+
+        // Cámara ortográfica para estilo render de producto isométrico limpio
+        const aspect = (container.clientWidth / container.clientHeight) || (16 / 9);
+        const frustumSize = 31;
+        const camera = new THREE.OrthographicCamera(
+            -frustumSize * aspect / 2,
+             frustumSize * aspect / 2,
+             frustumSize / 2,
+            -frustumSize / 2,
+            0.1,
+            220
+        );
+
+        const renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            powerPreference: 'high-performance'
+        });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.12;
+        container.appendChild(renderer.domElement);
+
+        // =========================================================================
+        // 3. ILUMINACIÓN: SOL CON SOMBRAS SUAVES + LUZ HEMISFÉRICA
+        // =========================================================================
+        const hemiLight = new THREE.HemisphereLight(0xFDF3E7, 0x522129, 0.95);
+        hemiLight.position.set(0, 30, 0);
+        scene.add(hemiLight);
+
+        const sunLight = new THREE.DirectionalLight(0xFFF2DF, 2.3);
+        sunLight.position.set(22, 34, 24);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 5;
+        sunLight.shadow.camera.far = 95;
+        const d = 27;
+        sunLight.shadow.camera.left = -d;
+        sunLight.shadow.camera.right = d;
+        sunLight.shadow.camera.top = d;
+        sunLight.shadow.camera.bottom = -d;
+        sunLight.shadow.bias = -0.0005;
+        sunLight.shadow.normalBias = 0.02;
+        scene.add(sunLight);
+
+        // Luz de relleno cálida suave desde el lado opuesto
+        const rimLight = new THREE.DirectionalLight(0xE5A853, 0.55);
+        rimLight.position.set(-20, 18, -22);
+        scene.add(rimLight);
+
+        // =========================================================================
+        // 4. POSTPROCESADO: PASE DE OCLUSIÓN AMBIENTAL (GTAO) + OUTPUT PASS
+        // =========================================================================
+        const composer = new EffectComposer(renderer);
+        const renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+
+        const width = container.clientWidth || 1920;
+        const height = container.clientHeight || 1080;
+        const gtaoPass = new GTAOPass(scene, camera, width, height);
+        gtaoPass.output = GTAOPass.OUTPUT.Default;
+        gtaoPass.blendIntensity = 0.85;
+        gtaoPass.updateGtaoMaterial({
+            radius: 0.65,
+            distanceExponent: 1.2,
+            thickness: 1.0,
+            scale: 1.0,
+            samples: 16,
+            distanceFallOff: 1.0,
+            screenSpaceRadius: false
+        });
+        composer.addPass(gtaoPass);
+
+        const outputPass = new OutputPass();
+        composer.addPass(outputPass);
+
+        // =========================================================================
+        // 5. SISTEMA DE CONSTRUCCIÓN INICIAL CON REBOTE (PRIMER SEGUNDO)
+        // =========================================================================
+        const dioramaRoot = new THREE.Group();
+        scene.add(dioramaRoot);
+
+        const popInItems = [];
+        const geometryCache = {};
+
+        // Helper para crear bloques redondeados (RoundedBoxGeometry) reutilizando geometrías
+        function createRoundedBlock(w, h, d, radius, material, castShadow = true, receiveShadow = true) {
+            const key = `${w.toFixed(3)}_${h.toFixed(3)}_${d.toFixed(3)}_${radius.toFixed(3)}`;
+            if (!geometryCache[key]) {
+                const maxR = Math.min(w, h, d) * 0.45;
+                const safeR = Math.min(radius, maxR);
+                geometryCache[key] = new RoundedBoxGeometry(w, h, d, 3, safeR);
+            }
+            const mesh = new THREE.Mesh(geometryCache[key], material);
+            mesh.castShadow = castShadow;
+            mesh.receiveShadow = receiveShadow;
+            return mesh;
+        }
+
+        // Registra un grupo u objeto para que suba y rebote en el primer segundo
+        function registerPop(obj, delay = 0, duration = 0.55, startOffsetY = -4.0) {
+            const targetY = obj.position.y;
+            obj.position.y = targetY + startOffsetY;
+            obj.scale.set(0.001, 0.001, 0.001);
+            popInItems.push({
+                obj,
+                targetY,
+                startOffsetY,
+                delay,
+                duration,
+                done: false
+            });
+        }
+
+        // Función de rebote elástico suave (easeOutBack)
+        function easeOutBack(t) {
+            const c1 = 1.70158;
+            const c3 = c1 + 1;
+            return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+        }
+
+        // =========================================================================
+        // 6. CONSTRUCCIÓN DEL MUNDO DIORAMA (DISTRIBUCIÓN CON PLAZA CENTRAL)
+        // =========================================================================
+
+        // --- A. LOSA FLOTANTE REDONDEADA (BASE DEL DIORAMA AMPLIADA) ---
+        const baseGroup = new THREE.Group();
+        dioramaRoot.add(baseGroup);
+
+        const subSlab = createRoundedBlock(34.5, 1.5, 29.5, 0.75, getMat(PALETTE.surfaceCard, 0.7), false, true);
+        subSlab.position.set(0, -1.4, 0);
+        baseGroup.add(subSlab);
+
+        const goldRim = createRoundedBlock(34.8, 0.24, 29.8, 0.12, getMat(PALETTE.accentGold, 0.35, 0.6), false, true);
+        goldRim.position.set(0, -0.62, 0);
+        baseGroup.add(goldRim);
+
+        const mainSlab = createRoundedBlock(34.2, 0.7, 29.2, 0.35, getMat(PALETTE.dirtEarth, 0.88), false, true);
+        mainSlab.position.set(0, -0.25, 0);
+        baseGroup.add(mainSlab);
+
+        registerPop(baseGroup, 0.0, 0.5, -3.5);
+
+        // --- B. CALLES PERIMETRALES (Calle 21 Nte. abajo y Pje. 21 1/2 Nte. arriba) ---
+        const roadsGroup = new THREE.Group();
+        dioramaRoot.add(roadsGroup);
+
+        const bottomRoad = createRoundedBlock(33.8, 0.12, 3.8, 0.05, getMat(PALETTE.asphalt, 0.85), false, true);
+        bottomRoad.position.set(0, 0.12, 11.4);
+        roadsGroup.add(bottomRoad);
+
+        const topRoad = createRoundedBlock(33.8, 0.12, 3.4, 0.05, getMat(PALETTE.asphalt, 0.85), false, true);
+        topRoad.position.set(0, 0.12, -11.4);
+        roadsGroup.add(topRoad);
+
+        const sidewalkBottom = createRoundedBlock(33.6, 0.2, 1.1, 0.06, getMat(PALETTE.sidewalk, 0.78), true, true);
+        sidewalkBottom.position.set(0, 0.17, 8.95);
+        roadsGroup.add(sidewalkBottom);
+
+        const sidewalkTop = createRoundedBlock(33.6, 0.2, 1.1, 0.06, getMat(PALETTE.sidewalk, 0.78), true, true);
+        sidewalkTop.position.set(0, 0.17, -9.15);
+        roadsGroup.add(sidewalkTop);
+
+        for (let x = -14.5; x <= 14.5; x += 2.6) {
+            const dashB = createRoundedBlock(1.2, 0.03, 0.15, 0.01, getMat(PALETTE.textPrimary, 0.6), false, true);
+            dashB.position.set(x, 0.19, 11.4);
+            roadsGroup.add(dashB);
+
+            const dashT = createRoundedBlock(1.1, 0.03, 0.14, 0.01, getMat(PALETTE.textPrimary, 0.6), false, true);
+            dashT.position.set(x, 0.19, -11.4);
+            roadsGroup.add(dashT);
+        }
+
+        const westLawn = createRoundedBlock(11.8, 0.14, 16.5, 0.12, getMat(PALETTE.grassPatch, 0.9), false, true);
+        westLawn.position.set(-10.2, 0.12, 0);
+        roadsGroup.add(westLawn);
+
+        const eastLawn = createRoundedBlock(11.8, 0.14, 16.5, 0.12, getMat(PALETTE.grassPatch, 0.9), false, true);
+        eastLawn.position.set(10.2, 0.12, 0);
+        roadsGroup.add(eastLawn);
+
+        registerPop(roadsGroup, 0.06, 0.5, -2.5);
+
+        // --- C. PLAZA CENTRAL RECTANGULAR ---
+        const plazaGroup = new THREE.Group();
+        dioramaRoot.add(plazaGroup);
+
+        const plazaFloor = createRoundedBlock(7.6, 0.18, 16.6, 0.18, getMat(PALETTE.sidewalk, 0.85), false, true);
+        plazaFloor.position.set(0, 0.15, 0.2);
+        plazaGroup.add(plazaFloor);
+
+        const plazaPath = createRoundedBlock(2.2, 0.21, 16.4, 0.08, getMat(PALETTE.accentSaffron, 0.8), false, true);
+        plazaPath.position.set(0, 0.17, 0.2);
+        plazaGroup.add(plazaPath);
+
+        const planterPositions = [
+            [-2.2, -3.5], [2.2, -3.5],
+            [-2.2,  3.8], [2.2,  3.8]
+        ];
+        planterPositions.forEach(([px, pz]) => {
+            const planter = createRoundedBlock(2.3, 0.26, 4.4, 0.12, getMat(PALETTE.grassPatch, 0.88), true, true);
+            planter.position.set(px, 0.19, pz);
+            plazaGroup.add(planter);
+        });
+
+        const benchCoords = [
+            [-1.35, -5.2,  Math.PI / 2],
+            [ 1.35, -5.2, -Math.PI / 2],
+            [-1.35,  1.8,  Math.PI / 2],
+            [ 1.35,  1.8, -Math.PI / 2],
+            [-1.35,  6.2,  Math.PI / 2],
+            [ 1.35,  6.2, -Math.PI / 2]
+        ];
+        benchCoords.forEach(([bx, bz, brot]) => {
+            const bench = new THREE.Group();
+            const seat = createRoundedBlock(1.1, 0.1, 0.42, 0.03, getMat(PALETTE.accentGold, 0.6));
+            seat.position.y = 0.34;
+            const back = createRoundedBlock(1.1, 0.32, 0.08, 0.02, getMat(PALETTE.terracottaWall, 0.7));
+            back.position.set(0, 0.52, -0.17);
+            const leg1 = createRoundedBlock(0.1, 0.34, 0.36, 0.02, getMat(PALETTE.poleMetal, 0.5));
+            leg1.position.set(-0.42, 0.17, 0);
+            const leg2 = leg1.clone();
+            leg2.position.x = 0.42;
+            bench.add(seat, back, leg1, leg2);
+            bench.position.set(bx, 0.22, bz);
+            bench.rotation.y = brot;
+            plazaGroup.add(bench);
+        });
+
+        // Estructura de juego infantil en el centro de la plaza
+        const playSet = new THREE.Group();
+        const tower = createRoundedBlock(1.1, 1.5, 1.1, 0.08, getMat(PALETTE.terracottaWall, 0.65));
+        tower.position.y = 0.75;
+        const towerRoof = createRoundedBlock(1.3, 0.35, 1.3, 0.1, getMat(PALETTE.accentGold, 0.5));
+        towerRoof.position.y = 1.65;
+        const slide = createRoundedBlock(0.55, 0.1, 1.5, 0.04, getMat(PALETTE.textPrimary, 0.4));
+        slide.position.set(0, 0.65, 1.05);
+        slide.rotation.x = 0.58;
+        playSet.add(tower, towerRoof, slide);
+        playSet.position.set(0, 0.24, -0.4);
+        plazaGroup.add(playSet);
+
+        // Paradero de bus en Calle 21 Nte.
+        const busStop = new THREE.Group();
+        const stopRoof = createRoundedBlock(1.8, 0.12, 0.95, 0.04, getMat(PALETTE.accentGold, 0.5));
+        stopRoof.position.y = 1.65;
+        const stopBack = createRoundedBlock(1.7, 1.55, 0.08, 0.03, getMat(PALETTE.surfaceCard, 0.6));
+        stopBack.position.set(0, 0.82, -0.38);
+        const stopPostL = createRoundedBlock(0.1, 1.65, 0.1, 0.03, getMat(PALETTE.poleMetal, 0.5));
+        stopPostL.position.set(-0.8, 0.82, 0.35);
+        const stopPostR = stopPostL.clone();
+        stopPostR.position.x = 0.8;
+        busStop.add(stopRoof, stopBack, stopPostL, stopPostR);
+        busStop.position.set(-2.2, 0.24, 9.0);
+        plazaGroup.add(busStop);
+
+        registerPop(plazaGroup, 0.12, 0.48, -2.5);
+
+        // --- D. BLOQUES DE DEPARTAMENTOS EN DISPOSICIÓN CON PLAZA CENTRAL ---
+        function buildApartmentBlock(width, height, depth, colsX, colsZ, delayBase, options = {}) {
+            const building = new THREE.Group();
+            const { hasSideMural = false } = options;
+
+            const plinth = createRoundedBlock(width + 0.26, 0.3, depth + 0.26, 0.07, getMat(PALETTE.beamCream, 0.75));
+            plinth.position.y = 0.15;
+            building.add(plinth);
+
+            const body = createRoundedBlock(width, height, depth, 0.1, getMat(PALETTE.terracottaWall, 0.72));
+            body.position.y = 0.3 + height / 2;
+            building.add(body);
+
+            const floors = 3;
+            const floorH = height / floors;
+            for (let f = 0; f <= floors; f++) {
+                const beam = createRoundedBlock(width + 0.16, 0.18, depth + 0.16, 0.04, getMat(PALETTE.beamCream, 0.65));
+                beam.position.y = 0.3 + f * floorH;
+                building.add(beam);
+            }
+
+            for (let i = 0; i <= colsX; i++) {
+                const px = -width / 2 + (width / colsX) * i;
+                const pillar = createRoundedBlock(0.2, height + 0.08, depth + 0.18, 0.04, getMat(PALETTE.beamCream, 0.65));
+                pillar.position.set(px, 0.3 + height / 2, 0);
+                building.add(pillar);
+            }
+
+            // Franjas blancas verticales (bordes y central) en ambos costados laterales (-X y +X)
+            // para formar la cuadrícula de 3 pisos x 2 paños rojos sin ventanas en los laterales
+            const sideSigns = [-1, 1];
+            const sideZFractions = [-0.5, 0.0, 0.5];
+            sideSigns.forEach((sideSign) => {
+                const edgeX = sideSign * (width / 2 + 0.02);
+
+                // Pilares blancos en extremos y centro del costado lateral
+                sideZFractions.forEach((frac) => {
+                    const pz = frac * depth;
+                    const vStrip = createRoundedBlock(0.14, height + 0.06, 0.22, 0.03, getMat(PALETTE.beamCream, 0.65));
+                    vStrip.position.set(edgeX, 0.3 + height / 2, pz);
+                    building.add(vStrip);
+                });
+
+                // Franjas horizontales blancas en cada piso del costado lateral
+                for (let f = 0; f <= floors; f++) {
+                    const hStrip = createRoundedBlock(0.14, 0.18, depth + 0.14, 0.03, getMat(PALETTE.beamCream, 0.65));
+                    hStrip.position.set(edgeX, 0.3 + f * floorH, 0);
+                    building.add(hStrip);
+                }
+
+                // Dos gabinetes eléctricos inferiores con tuberías verticales sobre el costado
+                const cabOffsetsZ = [-depth * 0.14, depth * 0.06];
+                cabOffsetsZ.forEach((cz, cIdx) => {
+                    const cab = createRoundedBlock(0.16, 0.66, 0.38, 0.03, getMat(PALETTE.beamCream, 0.55, 0.25));
+                    cab.position.set(edgeX + sideSign * 0.07, 0.3 + 0.44, cz);
+                    building.add(cab);
+
+                    for (let s = 0; s < 3; s++) {
+                        const slot = createRoundedBlock(0.04, 0.05, 0.24, 0.01, getMat(PALETTE.poleMetal, 0.6, 0.35));
+                        slot.position.set(edgeX + sideSign * 0.14, 0.3 + 0.27 + s * 0.16, cz);
+                        building.add(slot);
+                    }
+
+                    const pipeH = height * 0.76;
+                    const pipe = createRoundedBlock(0.07, pipeH, 0.07, 0.03, getMat(PALETTE.poleMetal, 0.5, 0.45));
+                    pipe.position.set(edgeX + sideSign * 0.06, 0.3 + pipeH * 0.5, cz + (cIdx === 0 ? -0.12 : 0.12));
+                    building.add(pipe);
+                });
+            });
+
+            // Escaleras metálicas exteriores (tramos inclinados, descansos y barandas) en ambos lados
+            const stairBayX = [-width * 0.24, width * 0.24];
+            const stairSides = [-1, 1];
+            stairSides.forEach((sideSign) => {
+                stairBayX.forEach((sx) => {
+                    const stairGroup = new THREE.Group();
+                    const zBase = sideSign * (depth / 2 + 0.42);
+
+                    for (let f = 0; f < floors; f++) {
+                        const yStart = 0.3 + f * floorH;
+                        const yEnd = 0.3 + (f + 1) * floorH;
+                        const yMid = (yStart + yEnd) * 0.5;
+                        const dy = yEnd - yStart;
+                        const dxFlight = 0.88;
+                        const flightLen = Math.hypot(dxFlight, dy);
+                        const pitchAngle = Math.atan2(dy, dxFlight);
+
+                        // Tramo de escalera inclinado con peldaños
+                        const ramp = createRoundedBlock(dxFlight, 0.11, 0.56, 0.025, getMat(PALETTE.poleMetal, 0.55, 0.45));
+                        ramp.position.set(sx, yMid, zBase);
+                        ramp.rotation.z = sideSign > 0 ? pitchAngle : -pitchAngle;
+                        stairGroup.add(ramp);
+
+                        const stepsCount = 5;
+                        for (let st = 1; st < stepsCount; st++) {
+                            const frac = st / stepsCount;
+                            const stepMesh = createRoundedBlock(0.14, 0.05, 0.52, 0.015, getMat(PALETTE.accentSaffron, 0.6, 0.3));
+                            const stepX = sx - (sideSign > 0 ? (frac - 0.5) * dxFlight : -(frac - 0.5) * dxFlight);
+                            stepMesh.position.set(stepX, yStart + frac * dy + 0.05, zBase);
+                            stairGroup.add(stepMesh);
+                        }
+
+                        // Descanso y baranda en nivel superior del tramo
+                        const landing = createRoundedBlock(0.56, 0.1, 0.64, 0.025, getMat(PALETTE.poleMetal, 0.55, 0.45));
+                        const landX = sx + (sideSign > 0 ? dxFlight * 0.55 : -dxFlight * 0.55);
+                        landing.position.set(landX, yEnd, zBase);
+                        stairGroup.add(landing);
+
+                        const rail = createRoundedBlock(0.54, 0.05, 0.05, 0.015, getMat(PALETTE.beamCream, 0.55));
+                        rail.position.set(landX, yEnd + 0.38, zBase + sideSign * 0.28);
+                        stairGroup.add(rail);
+                    }
+
+                    // Soportes verticales exteriores de la estructura de escalera
+                    const postFront = createRoundedBlock(0.08, height + 0.15, 0.08, 0.02, getMat(PALETTE.poleMetal, 0.55, 0.45));
+                    postFront.position.set(sx, 0.3 + (height + 0.15) * 0.5, zBase + sideSign * 0.26);
+                    const postBack = postFront.clone();
+                    postBack.position.z = zBase - sideSign * 0.26;
+                    stairGroup.add(postFront, postBack);
+
+                    building.add(stairGroup);
+                });
+            });
+
+            for (let f = 0; f < floors; f++) {
+                const wy = 0.3 + f * floorH + floorH * 0.52;
+                for (let c = 0; c < colsX; c++) {
+                    const wx = -width / 2 + (width / colsX) * (c + 0.5);
+                    const isLit = ((f + c) % 3 === 0);
+                    const winMat = isLit
+                        ? getMat(PALETTE.windowLit, 0.3, 0.1, PALETTE.accentGold, 0.45)
+                        : getMat(PALETTE.windowGlass, 0.2, 0.5);
+
+                    const frameF = createRoundedBlock(0.76, 0.68, 0.12, 0.02, getMat(PALETTE.beamCream, 0.6));
+                    frameF.position.set(wx, wy, depth / 2 + 0.02);
+                    building.add(frameF);
+
+                    const glassF = createRoundedBlock(0.62, 0.54, 0.14, 0.02, winMat, false, false);
+                    glassF.position.set(wx, wy, depth / 2 + 0.03);
+                    building.add(glassF);
+
+                    const frameB = frameF.clone();
+                    frameB.position.z = -depth / 2 - 0.02;
+                    building.add(frameB);
+
+                    const glassB = glassF.clone();
+                    glassB.position.z = -depth / 2 - 0.03;
+                    building.add(glassB);
+                }
+            }
+
+            // Detalles complementarios en el testero del bloque a la izquierda del paradero
+            if (hasSideMural) {
+                const muralGroup = new THREE.Group();
+                const sideX = width / 2 + 0.05;
+
+                const accentPanel = createRoundedBlock(0.08, height * 0.44, depth * 0.36, 0.03, getMat(PALETTE.accentGold, 0.55));
+                accentPanel.position.set(sideX + 0.03, 0.3 + height * 0.55, -depth * 0.18);
+                muralGroup.add(accentPanel);
+
+                const saffronTrim = createRoundedBlock(0.09, height * 0.28, depth * 0.24, 0.025, getMat(PALETTE.accentSaffron, 0.6));
+                saffronTrim.position.set(sideX + 0.04, 0.3 + height * 0.38, -depth * 0.22);
+                muralGroup.add(saffronTrim);
+
+                building.add(muralGroup);
+            }
+
+            const roofBase = createRoundedBlock(width + 0.72, 0.16, depth + 0.72, 0.05, getMat(PALETTE.beamCream, 0.7));
+            roofBase.position.y = 0.3 + height + 0.08;
+            building.add(roofBase);
+
+            const roofTop = createRoundedBlock(width + 0.52, 0.3, depth + 0.52, 0.08, getMat(PALETTE.roofSlate, 0.75));
+            roofTop.position.y = 0.3 + height + 0.24;
+            building.add(roofTop);
+
+            const ridge = createRoundedBlock(width + 0.35, 0.1, 0.22, 0.03, getMat(PALETTE.beamCream, 0.6));
+            ridge.position.y = 0.3 + height + 0.41;
+            building.add(ridge);
+
+            // Ductos y respiraderos en la cubierta superior
+            for (let vx = -width * 0.32; vx <= width * 0.32; vx += width * 0.32) {
+                const vent = createRoundedBlock(0.16, 0.42, 0.16, 0.04, getMat(PALETTE.beamCream, 0.65));
+                vent.position.set(vx, 0.3 + height + 0.53, 0);
+                building.add(vent);
+            }
+
+            registerPop(building, delayBase, 0.55, -5.0);
+            return building;
+        }
+
+        // 1. Tres bloques longitudinales paralelos a la izquierda (oeste) de la plaza central
+        const westBlocksX = [-5.4, -9.6, -13.8];
+        westBlocksX.forEach((bx, idx) => {
+            const isLeftOfBusStop = idx === 0;
+            const blk = buildApartmentBlock(8.4, 4.1, 2.5, 5, 2, 0.16 + idx * 0.05, {
+                hasSideMural: isLeftOfBusStop
+            });
+            blk.rotation.y = Math.PI / 2;
+            blk.position.set(bx, 0.1, 1.5 - idx * 0.55);
+            dioramaRoot.add(blk);
+        });
+
+        // 2. Tres bloques longitudinales paralelos escalonados a la derecha (este) de la plaza central
+        const eastBlocksX = [5.4, 9.6, 13.8];
+        eastBlocksX.forEach((bx, idx) => {
+            const blk = buildApartmentBlock(8.4, 4.1, 2.5, 5, 2, 0.20 + idx * 0.05);
+            blk.rotation.y = Math.PI / 2;
+            blk.position.set(bx, 0.1, 2.2 + idx * 0.45);
+            dioramaRoot.add(blk);
+        });
+
+        // 3. Tres bloques transversales en la cabecera norte (frente a Pje. 21 1/2 Nte.)
+        const northBlocksX = [-10.8, 0.0, 10.8];
+        northBlocksX.forEach((bx, idx) => {
+            const blk = buildApartmentBlock(7.8, 4.1, 2.5, 5, 2, 0.28 + idx * 0.04);
+            blk.position.set(bx, 0.1, -6.5);
+            dioramaRoot.add(blk);
+        });
+
+        // --- E. ÁRBOLES EN LA PLAZA CENTRAL, PASAJES INTERIORES Y VEREDAS ---
+        const animatedTrees = [];
+
+        function createTree(x, z, scale = 1.0, leanZ = 0, delay = 0.35) {
+            const tree = new THREE.Group();
+            tree.position.set(x, 0.15, z);
+
+            const trunk = createRoundedBlock(0.28 * scale, 1.65 * scale, 0.28 * scale, 0.1 * scale, getMat(PALETTE.trunkWood, 0.85));
+            trunk.position.y = 0.8 * scale;
+            trunk.rotation.z = leanZ;
+            tree.add(trunk);
+
+            const crownGroup = new THREE.Group();
+            crownGroup.position.set(-Math.sin(leanZ) * 1.4 * scale, 2.0 * scale, 0);
+
+            const c1 = createRoundedBlock(1.65 * scale, 1.55 * scale, 1.65 * scale, 0.72 * scale, getMat(PALETTE.treeFoliage1, 0.82));
+            c1.position.y = 0.25 * scale;
+            crownGroup.add(c1);
+
+            const c2 = createRoundedBlock(1.2 * scale, 1.15 * scale, 1.2 * scale, 0.55 * scale, getMat(PALETTE.treeFoliage2, 0.8));
+            c2.position.set(0.38 * scale, 0.72 * scale, 0.3 * scale);
+            crownGroup.add(c2);
+
+            const c3 = createRoundedBlock(0.95 * scale, 0.9 * scale, 0.95 * scale, 0.42 * scale, getMat(PALETTE.treeFoliage1, 0.85));
+            c3.position.set(-0.3 * scale, -0.3 * scale, 0.35 * scale);
+            crownGroup.add(c3);
+
+            tree.add(crownGroup);
+            dioramaRoot.add(tree);
+
+            registerPop(tree, delay, 0.5, -3.5);
+            animatedTrees.push({ crown: crownGroup, phase: x * 0.7 + z });
+            return tree;
+        }
+
+        const treeCoords = [
+            [-2.9, -4.4, 1.05, -0.06],
+            [-2.9,  0.4, 1.12,  0.05],
+            [-2.9,  5.2, 0.98, -0.04],
+            [ 2.9, -4.0, 1.08,  0.07],
+            [ 2.9,  1.2, 1.00, -0.05],
+            [ 2.9,  5.6, 1.10,  0.04],
+            [-7.5, -1.8, 0.92,  0.03],
+            [-11.7, 3.2, 0.95, -0.04],
+            [ 7.5, -1.5, 0.94,  0.05],
+            [ 11.7, 3.6, 0.90, -0.03],
+            [-8.5,  8.8, 1.05,  0.04],
+            [ 4.2,  8.8, 1.08, -0.05],
+            [ 12.4, 8.8, 0.96,  0.03],
+            [-5.6, -9.0, 0.95, -0.04],
+            [ 5.6, -9.0, 1.00,  0.04]
+        ];
+        treeCoords.forEach(([tx, tz, ts, tlean], idx) => {
+            createTree(tx, tz, ts, tlean, 0.34 + (idx % 5) * 0.03);
+        });
+
+        // --- F. FAROLAS URBANAS EN PLAZA Y AVENIDAS ---
+        function createStreetLamp(x, z, rotY, delay) {
+            const lamp = new THREE.Group();
+            lamp.position.set(x, 0.2, z);
+            lamp.rotation.y = rotY;
+
+            const basePole = createRoundedBlock(0.2, 0.95, 0.2, 0.07, getMat(PALETTE.terracottaWall, 0.6));
+            basePole.position.y = 0.475;
+            lamp.add(basePole);
+
+            const pole = createRoundedBlock(0.12, 3.3, 0.12, 0.04, getMat(PALETTE.poleMetal, 0.5, 0.4));
+            pole.position.y = 2.5;
+            lamp.add(pole);
+
+            const arm = createRoundedBlock(0.09, 0.09, 1.05, 0.03, getMat(PALETTE.poleMetal, 0.5, 0.4));
+            arm.position.set(0, 4.2, 0.45);
+            arm.rotation.x = -0.22;
+            lamp.add(arm);
+
+            const bulb = createRoundedBlock(0.22, 0.12, 0.36, 0.05, getMat(PALETTE.accentGold, 0.2, 0.2, PALETTE.accentGold, 1.4), false, false);
+            bulb.position.set(0, 4.26, 0.92);
+            lamp.add(bulb);
+
+            dioramaRoot.add(lamp);
+            registerPop(lamp, delay, 0.45, -3.5);
+        }
+
+        createStreetLamp(-10.5, 9.0, 0, 0.38);
+        createStreetLamp( 1.2,  9.0, 0, 0.40);
+        createStreetLamp( 10.5, 9.0, 0, 0.42);
+        createStreetLamp(-6.5, -9.1, Math.PI, 0.44);
+        createStreetLamp( 6.5, -9.1, Math.PI, 0.46);
+        createStreetLamp(-1.2, -2.5, Math.PI / 2, 0.48);
+        createStreetLamp( 1.2,  4.2, -Math.PI / 2, 0.50);
+
+        // =========================================================================
+        // 7. ELEMENTOS DINÁMICOS EN MOVIMIENTO CONTINUO (COCHES, MOTOS Y PERSONAS)
+        // =========================================================================
+        const vehicles = [];
+        const pedestrians = [];
+
+        function createCar(bodyColor) {
+            const car = new THREE.Group();
+
+            const chassis = createRoundedBlock(1.55, 0.42, 0.85, 0.12, getMat(bodyColor, 0.35, 0.25));
+            chassis.position.y = 0.34;
+            car.add(chassis);
+
+            const cabin = createRoundedBlock(0.88, 0.36, 0.72, 0.1, getMat(PALETTE.beamCream, 0.4, 0.1));
+            cabin.position.set(-0.08, 0.68, 0);
+            car.add(cabin);
+
+            const windshield = createRoundedBlock(0.92, 0.24, 0.75, 0.05, getMat(PALETTE.windowGlass, 0.15, 0.7), false, false);
+            windshield.position.set(-0.08, 0.66, 0);
+            car.add(windshield);
+
+            const wheelPositions = [
+                [ 0.46, 0.18,  0.42],
+                [ 0.46, 0.18, -0.42],
+                [-0.46, 0.18,  0.42],
+                [-0.46, 0.18, -0.42]
+            ];
+            wheelPositions.forEach(([wx, wy, wz]) => {
+                const wheel = createRoundedBlock(0.32, 0.32, 0.14, 0.14, getMat(PALETTE.tireBlack, 0.85));
+                wheel.position.set(wx, wy, wz);
+                car.add(wheel);
+            });
+
+            const headL = createRoundedBlock(0.08, 0.1, 0.16, 0.03, getMat(PALETTE.accentGold, 0.2, 0.1, PALETTE.accentGold, 1.5), false, false);
+            headL.position.set(0.77, 0.34, 0.26);
+            const headR = headL.clone();
+            headR.position.z = -0.26;
+            car.add(headL, headR);
+
+            return car;
+        }
+
+        function createMotorbike(colorHex) {
+            const moto = new THREE.Group();
+
+            const frame = createRoundedBlock(0.78, 0.28, 0.24, 0.08, getMat(colorHex, 0.35, 0.3));
+            frame.position.y = 0.32;
+            moto.add(frame);
+
+            const wF = createRoundedBlock(0.28, 0.28, 0.1, 0.12, getMat(PALETTE.tireBlack, 0.85));
+            wF.position.set(0.34, 0.16, 0);
+            const wR = wF.clone();
+            wR.position.x = -0.34;
+            moto.add(wF, wR);
+
+            const torso = createRoundedBlock(0.24, 0.42, 0.28, 0.08, getMat(PALETTE.surfaceCard, 0.6));
+            torso.position.set(-0.04, 0.64, 0);
+            torso.rotation.z = -0.22;
+            moto.add(torso);
+
+            const helmet = createRoundedBlock(0.24, 0.24, 0.24, 0.11, getMat(PALETTE.accentGold, 0.3, 0.2));
+            helmet.position.set(0.04, 0.94, 0);
+            moto.add(helmet);
+
+            return moto;
+        }
+
+        function createPedestrian(shirtColor, pantsColor) {
+            const person = new THREE.Group();
+
+            const legL = createRoundedBlock(0.11, 0.36, 0.11, 0.04, getMat(pantsColor, 0.75));
+            legL.position.set(0, 0.18, 0.07);
+            const legR = legL.clone();
+            legR.position.z = -0.07;
+
+            const body = createRoundedBlock(0.18, 0.38, 0.26, 0.06, getMat(shirtColor, 0.65));
+            body.position.y = 0.52;
+
+            const head = createRoundedBlock(0.2, 0.2, 0.2, 0.09, getMat(PALETTE.textPrimary, 0.55));
+            head.position.y = 0.84;
+
+            const armL = createRoundedBlock(0.09, 0.3, 0.09, 0.04, getMat(shirtColor, 0.65));
+            armL.position.set(0, 0.5, 0.18);
+            const armR = armL.clone();
+            armR.position.z = -0.18;
+
+            person.add(legL, legR, body, head, armL, armR);
+            person.userData = { legL, legR, armL, armR, body };
+            return person;
+        }
+
+        // =========================================================================
+        // 8. RUTAS EN BUCLE PARA VEHÍCULOS Y PEATONES (AVENIDAS Y PLAZA CENTRAL)
+        // =========================================================================
+
+        const car1 = createCar(PALETTE.carRed);
+        dioramaRoot.add(car1);
+        registerPop(car1, 0.5, 0.4, -2.0);
+        vehicles.push({
+            mesh: car1,
+            axis: 'x',
+            dir: -1,
+            fixedCoord: 10.75,
+            min: -16.5,
+            max: 16.5,
+            pos: 8.0,
+            speed: 5.2
+        });
+
+        const car2 = createCar(PALETTE.carCream);
+        dioramaRoot.add(car2);
+        registerPop(car2, 0.55, 0.4, -2.0);
+        vehicles.push({
+            mesh: car2,
+            axis: 'x',
+            dir: 1,
+            fixedCoord: 12.05,
+            min: -16.5,
+            max: 16.5,
+            pos: -10.5,
+            speed: 4.6
+        });
+
+        const car3 = createCar(PALETTE.carGold);
+        dioramaRoot.add(car3);
+        registerPop(car3, 0.58, 0.4, -2.0);
+        vehicles.push({
+            mesh: car3,
+            axis: 'x',
+            dir: -1,
+            fixedCoord: -10.85,
+            min: -16.5,
+            max: 16.5,
+            pos: -3.0,
+            speed: 4.4
+        });
+
+        const moto1 = createMotorbike(PALETTE.accentGold);
+        dioramaRoot.add(moto1);
+        registerPop(moto1, 0.52, 0.4, -2.0);
+        vehicles.push({
+            mesh: moto1,
+            axis: 'x',
+            dir: 1,
+            fixedCoord: 11.85,
+            min: -16.5,
+            max: 16.5,
+            pos: 4.0,
+            speed: 7.8,
+            isMoto: true
+        });
+
+        const moto2 = createMotorbike(PALETTE.terracottaWall);
+        dioramaRoot.add(moto2);
+        registerPop(moto2, 0.56, 0.4, -2.0);
+        vehicles.push({
+            mesh: moto2,
+            axis: 'x',
+            dir: 1,
+            fixedCoord: -11.95,
+            min: -16.5,
+            max: 16.5,
+            pos: -6.5,
+            speed: 7.2,
+            isMoto: true
+        });
+
+        const pedConfigs = [
+            { shirt: PALETTE.accentGold, pants: PALETTE.bgDeep, path: [[-0.45, -7.2], [-0.45, 8.2]], speed: 1.25, offset: 0.15 },
+            { shirt: PALETTE.textPrimary, pants: PALETTE.surfaceCard, path: [[0.55, 8.0], [0.55, -7.0]], speed: 1.15, offset: 0.55 },
+            { shirt: PALETTE.terracottaWall, pants: PALETTE.bgDeep, path: [[-3.2, 2.8], [3.2, 2.8]], speed: 1.05, offset: 0.25 },
+            { shirt: PALETTE.accentSaffron, pants: PALETTE.bgDeep, path: [[3.2, -2.4], [-3.2, -2.4]], speed: 1.10, offset: 0.65 },
+            { shirt: PALETTE.textPrimary, pants: PALETTE.terracottaDark, path: [[-14.5, 8.95], [14.5, 8.95]], speed: 1.35, offset: 0.30 },
+            { shirt: PALETTE.accentGold, pants: PALETTE.surfaceCard, path: [[14.5, 9.15], [-14.5, 9.15]], speed: 1.20, offset: 0.75 },
+            { shirt: PALETTE.terracottaWall, pants: PALETTE.surfaceCard, path: [[-7.5, 6.5], [-7.5, -4.5]], speed: 1.05, offset: 0.40 },
+            { shirt: PALETTE.accentGold, pants: PALETTE.bgDeep, path: [[7.5, -4.2], [7.5, 6.8]], speed: 1.12, offset: 0.85 }
+        ];
+
+        pedConfigs.forEach((cfg, idx) => {
+            const ped = createPedestrian(cfg.shirt, cfg.pants);
+            dioramaRoot.add(ped);
+            registerPop(ped, 0.48 + idx * 0.03, 0.4, -2.0);
+            pedestrians.push({
+                mesh: ped,
+                start: new THREE.Vector2(cfg.path[0][0], cfg.path[0][1]),
+                end: new THREE.Vector2(cfg.path[1][0], cfg.path[1][1]),
+                progress: cfg.offset,
+                dir: 1,
+                speed: cfg.speed,
+                phase: idx * 1.4
+            });
+        });
+
+        // =========================================================================
+        // 9. REDIMENSIONAMIENTO RESPONSIVE DEL MARCO 1920x1080
+        // =========================================================================
+        function onResize() {
+            const w = container.clientWidth || 1920;
+            const h = container.clientHeight || 1080;
+            const asp = w / h;
+
+            camera.left = -frustumSize * asp / 2;
+            camera.right = frustumSize * asp / 2;
+            camera.top = frustumSize / 2;
+            camera.bottom = -frustumSize / 2;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(w, h);
+            composer.setSize(w, h);
+            gtaoPass.setSize(w, h);
+        }
+        window.addEventListener('resize', onResize);
+
+        // =========================================================================
+        // 10. BUCLE PRINCIPAL DE ANIMACIÓN (CONSTRUCCIÓN, VIDA URBANA Y ÓRBITA)
+        // =========================================================================
+        let startTime = null;
+        let lastTime = 0;
+
+        function animate(now) {
+            requestAnimationFrame(animate);
+
+            if (startTime === null) {
+                startTime = now;
+                lastTime = now;
+                const loader = document.getElementById('loader');
+                if (loader) {
+                    loader.style.opacity = '0';
+                    setTimeout(() => loader.remove(), 650);
+                }
+            }
+
+            const elapsedTotal = (now - startTime) * 0.001;
+            const dt = Math.min((now - lastTime) * 0.001, 0.05);
+            lastTime = now;
+
+            // 1) ANIMACIÓN DE CONSTRUCCIÓN EN EL PRIMER SEGUNDO
+            for (let i = 0; i < popInItems.length; i++) {
+                const item = popInItems[i];
+                if (item.done) continue;
+
+                const localT = (elapsedTotal - item.delay) / item.duration;
+                if (localT <= 0) {
+                    item.obj.scale.set(0.001, 0.001, 0.001);
+                } else if (localT >= 1) {
+                    item.obj.position.y = item.targetY;
+                    item.obj.scale.set(1, 1, 1);
+                    item.done = true;
+                } else {
+                    const eased = easeOutBack(localT);
+                    item.obj.position.y = item.targetY + item.startOffsetY * (1 - eased);
+                    const s = Math.max(0.001, eased);
+                    item.obj.scale.set(s, s, s);
+                }
+            }
+
+            // 2) MOVIMIENTO CONTINUO DE COCHES Y MOTOS EN BUCLE
+            for (let i = 0; i < vehicles.length; i++) {
+                const v = vehicles[i];
+                v.pos += v.dir * v.speed * dt;
+
+                if (v.dir > 0 && v.pos > v.max) v.pos = v.min;
+                if (v.dir < 0 && v.pos < v.min) v.pos = v.max;
+
+                const bounceY = 0.18 + Math.abs(Math.sin(elapsedTotal * (v.isMoto ? 18 : 12) + i)) * 0.025;
+
+                if (v.axis === 'x') {
+                    v.mesh.position.set(v.pos, bounceY, v.fixedCoord);
+                    v.mesh.rotation.y = v.dir > 0 ? 0 : Math.PI;
+                } else {
+                    v.mesh.position.set(v.fixedCoord, bounceY, v.pos);
+                    v.mesh.rotation.y = v.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+                }
+            }
+
+            // 3) MOVIMIENTO CONTINUO DE PEATONES CON CICLO DE CAMINATA
+            for (let i = 0; i < pedestrians.length; i++) {
+                const p = pedestrians[i];
+                const dist = p.start.distanceTo(p.end);
+                p.progress += (p.dir * p.speed * dt) / dist;
+
+                if (p.progress >= 1) {
+                    p.progress = 1;
+                    p.dir = -1;
+                } else if (p.progress <= 0) {
+                    p.progress = 0;
+                    p.dir = 1;
+                }
+
+                const currX = THREE.MathUtils.lerp(p.start.x, p.end.x, p.progress);
+                const currZ = THREE.MathUtils.lerp(p.start.y, p.end.y, p.progress);
+
+                const walkCycle = elapsedTotal * 9.5 + p.phase;
+                const stepBounce = Math.abs(Math.sin(walkCycle)) * 0.05;
+
+                p.mesh.position.set(currX, 0.25 + stepBounce, currZ);
+
+                const targetVec = p.dir > 0 ? p.end : p.start;
+                const angle = Math.atan2(targetVec.x - currX, targetVec.y - currZ) - Math.PI / 2;
+                p.mesh.rotation.y = angle;
+
+                const { legL, legR, armL, armR } = p.mesh.userData;
+                const swing = Math.sin(walkCycle) * 0.55;
+                legL.rotation.z = swing;
+                legR.rotation.z = -swing;
+                armL.rotation.z = -swing * 0.8;
+                armR.rotation.z = swing * 0.8;
+            }
+
+            // 4) BRISA SUAVE EN LAS COPAS DE LOS ÁRBOLES
+            for (let i = 0; i < animatedTrees.length; i++) {
+                const t = animatedTrees[i];
+                t.crown.rotation.z = Math.sin(elapsedTotal * 1.6 + t.phase) * 0.035;
+                t.crown.rotation.x = Math.cos(elapsedTotal * 1.3 + t.phase) * 0.025;
+            }
+
+            // 5) CÁMARA ORBITAL LENTA Y SUAVE CON LIGERO ACERCAMIENTO EN BUCLE SIN SALTOS
+            // Encuadre orientado desde la calle frontal (+Z) hacia la plaza central
+            const loopPeriod = 36.0;
+            const theta = (elapsedTotal / loopPeriod) * Math.PI * 2;
+
+            const baseAzimuth = 0.0;
+            const orbitAngle = baseAzimuth + Math.sin(theta) * 0.34;
+            const radius = 37;
+            const camHeight = 14.5 + Math.cos(theta) * 1.4;
+
+            camera.position.set(
+                Math.sin(orbitAngle) * radius,
+                camHeight,
+                Math.cos(orbitAngle) * radius
+            );
+            camera.lookAt(0, 1.8, -0.5);
+
+            camera.zoom = 1.08 + (0.5 - 0.5 * Math.cos(theta)) * 0.18;
+            camera.updateProjectionMatrix();
+
+            // Renderizar con postprocesado (GTAO + ACES)
+            composer.render();
+        }
+
+        // Inicio automático al cargar la ventana
+        window.onload = function () {
+            onResize();
+            requestAnimationFrame(animate);
+        };
+    </script>
+</body>
+</html>
